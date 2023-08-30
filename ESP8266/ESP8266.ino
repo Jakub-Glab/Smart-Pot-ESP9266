@@ -18,6 +18,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <ctime>
+#include <EasyButton.h>
 
 
 // Screen settings
@@ -25,6 +26,7 @@
 #define SCREEN_HEIGHT 64  // OLED display height, in pixels
 #define OLED_RESET     -1 // Reset pin
 #define SCREEN_ADDRESS 0x3C
+#define BUTTON_PIN 0  // Pin for Flash button
 
 // Global objects and variables
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
@@ -32,6 +34,8 @@ BH1750 lightMeter;
 Adafruit_BMP280 bme;
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pl.pool.ntp.org", 7200);
+EasyButton button(BUTTON_PIN);
+WiFiManager wifiManager;
  
 char token[41];
 char deviceName[41];
@@ -52,7 +56,7 @@ int intervals = (AirValue - WaterValue)/3;
 int soilMoistureValue = 0;
 float moisturePrcnt = 0.0;
 
-const char* serverUrl = "http://a27f-85-221-147-214.ngrok-free.app/api/v1/users/me"; // URL of the server endpoint
+const char* serverUrl = "http://e143-85-221-147-214.ngrok-free.app/api/v1/users/me"; // URL of the server endpoint
  
 
 void setup()
@@ -60,6 +64,8 @@ void setup()
   // Debug console
   Wire.begin();
   Serial.begin(9600);
+  button.begin();
+  button.onPressed(onPressed);
 
   readStoredInfo();
 
@@ -72,9 +78,6 @@ void setup()
 
   wifiManager.addParameter(&api_token);
   wifiManager.addParameter(&device_name);
-
-  // Uncomment and run it once, if you want to erase all the stored information
-  // wifiManager.resetSettings();
 
   // Sets timeout until configuration portal gets turned off.
   // if this is not done, the device will remain in config mode forever.
@@ -120,6 +123,7 @@ void setup()
 
 void loop()
 {
+  button.read();
   timeClient.update();
   currentDate = getCurrentDateTime();
   unsigned long currentMillis = millis();
@@ -136,6 +140,18 @@ void loop()
  void saveConfigCallback () {
   Serial.println("Should save config");
   shouldSaveConfig = true;
+}
+
+void onPressed() {
+  Serial.println("Flash button has been pressed. Resetting WiFi settings...");
+  wifiManager.resetSettings();
+  
+  // Give it a moment to actually send the reset WiFi command
+  delay(1000);
+
+  // Now reset the ESP
+  Serial.println("Restarting ESP...");
+  ESP.restart();
 }
 
 String getCurrentDateTime() {
@@ -226,7 +242,7 @@ void printToSerial()
     {
       Serial.println("Soil Moisture: Dry");
     }
-    Serial.print("====================================");
+    Serial.println("====================================");
 }
  
 void printToDisplay()
