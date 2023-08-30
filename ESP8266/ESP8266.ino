@@ -1,10 +1,7 @@
-#define BLYNK_PRINT Serial
-#define BLYNK_TEMPLATE_ID "TMPL93-1UBiM"
-#define BLYNK_TEMPLATE_NAME "Quickstart Template"
-#define BLYNK_AUTH_TOKEN "****"
-
-
+// Include necessary libraries
+#include <FS.h>
 #include <ESP8266WiFi.h>
+#include <WiFiClient.h>
 #include <BlynkSimpleEsp8266.h>
 #include <BH1750.h>
 #include <Wire.h>
@@ -14,74 +11,195 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Math.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiManager.h>
+#include <ArduinoJson.h>
+#include <time.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+#include <ctime>
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
 
-// Declaration for SSD1306 display connected using I2C
+// Screen settings
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 64  // OLED display height, in pixels
 #define OLED_RESET     -1 // Reset pin
 #define SCREEN_ADDRESS 0x3C
+
+// Global objects and variables
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
-// Your WiFi credentials.
-// Set password to "" for open networks.
-char ssid[] = "****";
-char pass[] = "****";
-
 BH1750 lightMeter;
 Adafruit_BMP280 bme;
-
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "pl.pool.ntp.org", 7200);
+ 
+char token[41];
+char deviceName[41];
+bool shouldSaveConfig = false;
 
 unsigned long previousMillis = 0;    // will store last time DHT was updated
+const long interval = 2000;          // Updates DHT readings every 2 seconds
 
-// Updates DHT readings every 2 seconds
-const long interval = 2000;
-
-const int AirValue = 780;   //you need to replace this value with Value_1
-const int WaterValue = 390;  //you need to replace this value with Value_2
-int intervals = (AirValue - WaterValue)/3;
-int soilMoistureValue = 0;
-float moisturePrcnt = 0.0;
+String currentDate;
 
 float press;
 float lux;
 float temp;
 
+const int AirValue = 780;   
+const int WaterValue = 390;  
+int intervals = (AirValue - WaterValue)/3;
+int soilMoistureValue = 0;
+float moisturePrcnt = 0.0;
+
+const char* serverUrl = "http://a27f-85-221-147-214.ngrok-free.app/api/v1/users/me"; // URL of the server endpoint
+ 
+
+void setup()
+{
+  // Debug console
+  Wire.begin();
+  Serial.begin(9600);
+
+  readStoredInfo();
+
+  WiFiManagerParameter api_token("token", "your token", token, 40);
+  WiFiManagerParameter device_name("device_name", "your device name", deviceName, 40);
+
+  WiFiManager wifiManager;
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  wifiManager.addParameter(&api_token);
+  wifiManager.addParameter(&device_name);
+
+  // Uncomment and run it once, if you want to erase all the stored information
+  // wifiManager.resetSettings();
+
+  // Sets timeout until configuration portal gets turned off.
+  // if this is not done, the device will remain in config mode forever.
+  wifiManager.setTimeout(180);
+
+  // Fetches ssid and pass from EEPROM and tries to connect.
+  // If it does not connect, it starts an access point with the name "AutoConnectAP"
+  // and goes into a blocking loop awaiting configuration.
+  if (!wifiManager.autoConnect("AutoConnectAP")) {
+    Serial.println("Failed to connect and hit timeout");
+    delay(3000);
+    // Reset and try again, or maybe put it to deep sleep.
+    ESP.reset();
+    delay(5000);
+  }
+
+  Serial.println("Connected to WiFi.");
+
+  strcpy(token, api_token.getValue());
+  strcpy(deviceName, device_name.getValue());
+
+  Serial.print("Token: ");
+  Serial.println(token);
+  Serial.print("Device Name: ");
+  Serial.println(deviceName);
+
+  saveData();
+
+  // Initialize Sensors
+  initializeSensors();
+
+  // Initialize display settings
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  timeClient.begin();
+
+  while(!timeClient.update()) {
+    timeClient.forceUpdate();
+    delay(500);
+  }
+}
+
+void loop()
+{
+  timeClient.update();
+  currentDate = getCurrentDateTime();
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+    readFromSensors();
+    printToSerial();
+    printToDisplay();
+    sendToServer();
+  }
+}
+
+ 
+ void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
+String getCurrentDateTime() {
+  unsigned long epochTime = timeClient.getEpochTime();
+  struct tm *ptm = gmtime ((time_t *)&epochTime);
+  
+  char buffer[30];
+  strftime(buffer, 30, "%Y-%m-%dT%H:%M:%SZ", ptm);
+  
+  return String(buffer);
+}
 
 void initializeSensors()
 {
-   Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+   //Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
    if (lightMeter.begin()) {
     Serial.println(F("BH1750 initialised"));
   }
   else {
     Serial.println(F("Error initialising BH1750"));
   }
-
+ 
   if (!bme.begin(0x76)) { 
     Serial.println("Could not find a valid BMP280 sensor, check wiring!");
   }
-
+ 
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-	Serial.println(F("SSD1306 allocation failed"));
-	for(;;); // Don't proceed, loop forever
+    Serial.println(F("SSD1306 allocation failed"));
+    for(;;); // Don't proceed, loop forever
   }
 }
+ 
+void sendToServer() {
+  if (WiFi.status() == WL_CONNECTED) { 
+    
+    WiFiClient client; 
+    HTTPClient http;    
 
-BLYNK_WRITE(V1)  // Reset
-{
-  if (param.asInt()==1) {
-  delay(100);
-  ESP.restart();
-    } 
-}
+    // Create JSON payload
+    String payload = "{\"last_updated\":\"" + currentDate + "\","
+                      "\"device\":\"" + String(deviceName) + "\","
+                      "\"sensors\":{\"humidity\":" + String(press) + ","
+                                   "\"lux\":" + String(lux) + ","
+                                   "\"temperature\":" + String(temp) + "},"
+                      "\"device_token\":\"" + String(token) + "\"}";
+  
+    // Specify request destination
+    http.begin(client, serverUrl);
+    http.addHeader("Content-Type", "application/json");  
+    
+    int httpCode = http.POST(payload);                                      
 
-void writeToBlynk()
-{
-  Blynk.virtualWrite(V8, lux);
-  Blynk.virtualWrite(V6, temp);
-  Blynk.virtualWrite(V7, press);
-  Blynk.virtualWrite(V9, moisturePrcnt);
+    // Print HTTP return code
+    Serial.println("HTTP Response code: " + String(httpCode));
+
+    if (httpCode > 0) {
+      String response = http.getString();
+      Serial.println("HTTP Response: " + response);
+    }
+    
+    http.end();
+  } else {
+    Serial.println("Error in WiFi connection");
+  }
 }
 
 void printToSerial()
@@ -110,7 +228,7 @@ void printToSerial()
     }
     Serial.print("====================================");
 }
-
+ 
 void printToDisplay()
 {
   display.clearDisplay();
@@ -137,7 +255,7 @@ void printToDisplay()
   display.println("=====================");
   display.display();
 }
-
+ 
 void readFromSensors()
 {
   temp = bme.readTemperature();
@@ -148,28 +266,82 @@ void readFromSensors()
   lux = lightMeter.readLightLevel();
 }
 
-void setup()
+void readStoredInfo()
 {
-  // Debug console
-  Wire.begin();
-  Serial.begin(9600);
-  initializeSensors();
-  // Clear the buffer.
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
+  //clean FS, for testing
+  //SPIFFS.format();
+
+  //read configuration from FS json
+  Serial.println("mounting FS...");
+
+  if (SPIFFS.begin()) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+
+ #if defined(ARDUINOJSON_VERSION_MAJOR) && ARDUINOJSON_VERSION_MAJOR >= 6
+        DynamicJsonDocument json(1024);
+        auto deserializeError = deserializeJson(json, buf.get());
+        serializeJson(json, Serial);
+        if ( ! deserializeError ) {
+#else
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+#endif
+          Serial.println("\nparsed json");
+          strcpy(token, json["token"]);
+          strcpy(deviceName, json["deviceName"]);
+        } else {
+          Serial.println("failed to load json config");
+        }
+        configFile.close();
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+  //end read
 }
 
-void loop()
+void saveData()
 {
-  Blynk.run();
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= interval) {
-    previousMillis = currentMillis;
-    readFromSensors();
-    printToSerial();
-    printToDisplay();
-    writeToBlynk();
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+ #if defined(ARDUINOJSON_VERSION_MAJOR) && ARDUINOJSON_VERSION_MAJOR >= 6
+    DynamicJsonDocument json(1024);
+#else
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+#endif
+    json["token"] = token;
+    json["deviceName"] = deviceName;
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+#if defined(ARDUINOJSON_VERSION_MAJOR) && ARDUINOJSON_VERSION_MAJOR >= 6
+    serializeJson(json, Serial);
+    serializeJson(json, configFile);
+#else
+    json.printTo(Serial);
+    json.printTo(configFile);
+#endif
+    configFile.close();
+    //end save
   }
 }
+ 
 
