@@ -37,9 +37,12 @@ NTPClient timeClient(ntpUDP, "pl.pool.ntp.org", 7200);
 EasyButton button(BUTTON_PIN);
 WiFiManager wifiManager;
  
-char token[41];
+char token[10];
 char deviceName[41];
+char deviceID[10];
 bool shouldSaveConfig = false;
+
+int buttonDuration = 5000;
 
 unsigned long previousMillis = 0;    // will store last time DHT was updated
 const long interval = 2000;          // Updates DHT readings every 2 seconds
@@ -56,7 +59,7 @@ int intervals = (AirValue - WaterValue)/3;
 int soilMoistureValue = 0;
 float moisturePrcnt = 0.0;
 
-const char* serverUrl = "http://e143-85-221-147-214.ngrok-free.app/api/v1/users/me"; // URL of the server endpoint
+const char* serverUrl = "http://5dfe-83-20-164-34.ngrok-free.app/api/v1/plants/update-plant"; // URL of the server endpoint
  
 
 void setup()
@@ -65,12 +68,13 @@ void setup()
   Wire.begin();
   Serial.begin(9600);
   button.begin();
-  button.onPressed(onPressed);
+  button.onPressedFor(buttonDuration, onPressed);
 
   readStoredInfo();
 
   WiFiManagerParameter api_token("token", "your token", token, 40);
   WiFiManagerParameter device_name("device_name", "your device name", deviceName, 40);
+  WiFiManagerParameter device_id("device_id", "your device id", deviceID, 40);
 
   WiFiManager wifiManager;
 
@@ -78,6 +82,7 @@ void setup()
 
   wifiManager.addParameter(&api_token);
   wifiManager.addParameter(&device_name);
+  wifiManager.addParameter(&device_id);
 
   // Sets timeout until configuration portal gets turned off.
   // if this is not done, the device will remain in config mode forever.
@@ -98,6 +103,7 @@ void setup()
 
   strcpy(token, api_token.getValue());
   strcpy(deviceName, device_name.getValue());
+  strcpy(deviceID, device_id.getValue());
 
   Serial.print("Token: ");
   Serial.println(token);
@@ -145,6 +151,7 @@ void loop()
 void onPressed() {
   Serial.println("Flash button has been pressed. Resetting WiFi settings...");
   wifiManager.resetSettings();
+  SPIFFS.format();
   
   // Give it a moment to actually send the reset WiFi command
   delay(1000);
@@ -191,18 +198,22 @@ void sendToServer() {
     HTTPClient http;    
 
     // Create JSON payload
-    String payload = "{\"last_updated\":\"" + currentDate + "\","
-                      "\"device\":\"" + String(deviceName) + "\","
-                      "\"sensors\":{\"humidity\":" + String(press) + ","
-                                   "\"lux\":" + String(lux) + ","
-                                   "\"temperature\":" + String(temp) + "},"
-                      "\"device_token\":\"" + String(token) + "\"}";
-  
+    String payload = "{"
+                     "\"device_id\":\"" + String(deviceID) + "\","  // Add the device_id field
+                     "\"sensors\":{"
+                     "\"humidity\":" + String(moisturePrcnt) + ","
+                     "\"lux\":" + String(lux) + ","
+                     "\"temperature\":" + String(temp) + "},"
+                     "\"device_token\":\"" + String(token) + "\","
+                     "\"name\":\"" + String(deviceName) + "\","  // Add the name field
+                     "\"last_updated\":\"" + String(currentDate) + "\""
+                     "}";
+
     // Specify request destination
     http.begin(client, serverUrl);
     http.addHeader("Content-Type", "application/json");  
     
-    int httpCode = http.POST(payload);                                      
+    int httpCode = http.PATCH(payload); // Make sure your server supports PATCH or change this to POST or PUT as required
 
     // Print HTTP return code
     Serial.println("HTTP Response code: " + String(httpCode));
@@ -217,6 +228,7 @@ void sendToServer() {
     Serial.println("Error in WiFi connection");
   }
 }
+
 
 void printToSerial()
 {
@@ -318,6 +330,7 @@ void readStoredInfo()
           Serial.println("\nparsed json");
           strcpy(token, json["token"]);
           strcpy(deviceName, json["deviceName"]);
+          strcpy(deviceID, json["deviceID"]);
         } else {
           Serial.println("failed to load json config");
         }
@@ -330,11 +343,10 @@ void readStoredInfo()
   //end read
 }
 
-void saveData()
-{
+void saveData() {
   if (shouldSaveConfig) {
     Serial.println("saving config");
- #if defined(ARDUINOJSON_VERSION_MAJOR) && ARDUINOJSON_VERSION_MAJOR >= 6
+#if defined(ARDUINOJSON_VERSION_MAJOR) && ARDUINOJSON_VERSION_MAJOR >= 6
     DynamicJsonDocument json(1024);
 #else
     DynamicJsonBuffer jsonBuffer;
@@ -342,6 +354,7 @@ void saveData()
 #endif
     json["token"] = token;
     json["deviceName"] = deviceName;
+    json["deviceID"] = deviceID; 
 
     File configFile = SPIFFS.open("/config.json", "w");
     if (!configFile) {
@@ -356,8 +369,8 @@ void saveData()
     json.printTo(configFile);
 #endif
     configFile.close();
-    //end save
   }
 }
+
  
 
