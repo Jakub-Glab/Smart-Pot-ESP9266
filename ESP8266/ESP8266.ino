@@ -64,7 +64,6 @@ const char* serverUrl = "http://5dfe-83-20-164-34.ngrok-free.app/api/v1/plants/u
 
 void setup()
 {
-  // Debug console
   Wire.begin();
   Serial.begin(9600);
   button.begin();
@@ -84,13 +83,8 @@ void setup()
   wifiManager.addParameter(&device_name);
   wifiManager.addParameter(&device_id);
 
-  // Sets timeout until configuration portal gets turned off.
-  // if this is not done, the device will remain in config mode forever.
   wifiManager.setTimeout(180);
 
-  // Fetches ssid and pass from EEPROM and tries to connect.
-  // If it does not connect, it starts an access point with the name "AutoConnectAP"
-  // and goes into a blocking loop awaiting configuration.
   if (!wifiManager.autoConnect("AutoConnectAP")) {
     Serial.println("Failed to connect and hit timeout");
     delay(3000);
@@ -153,10 +147,8 @@ void onPressed() {
   wifiManager.resetSettings();
   SPIFFS.format();
   
-  // Give it a moment to actually send the reset WiFi command
   delay(1000);
 
-  // Now reset the ESP
   Serial.println("Restarting ESP...");
   ESP.restart();
 }
@@ -173,8 +165,8 @@ String getCurrentDateTime() {
 
 void initializeSensors()
 {
-   //Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
-   if (lightMeter.begin()) {
+ 
+  if (lightMeter.begin()) {
     Serial.println(F("BH1750 initialised"));
   }
   else {
@@ -187,7 +179,7 @@ void initializeSensors()
  
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
-    for(;;); // Don't proceed, loop forever
+    for(;;); 
   }
 }
  
@@ -209,13 +201,11 @@ void sendToServer() {
                      "\"last_updated\":\"" + String(currentDate) + "\""
                      "}";
 
-    // Specify request destination
     http.begin(client, serverUrl);
     http.addHeader("Content-Type", "application/json");  
     
-    int httpCode = http.PATCH(payload); // Make sure your server supports PATCH or change this to POST or PUT as required
+    int httpCode = http.PATCH(payload); 
 
-    // Print HTTP return code
     Serial.println("HTTP Response code: " + String(httpCode));
 
     if (httpCode > 0) {
@@ -340,7 +330,7 @@ void readStoredInfo()
   } else {
     Serial.println("failed to mount FS");
   }
-  //end read
+
 }
 
 void saveData() {
